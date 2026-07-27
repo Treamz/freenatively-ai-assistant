@@ -1699,7 +1699,12 @@ const templateFor = (answerType: AnswerType): string => {
   }
 };
 
-const requiredLayersFor = (answerType: AnswerType, documentGroundedCustomModeActive = false): ContextLayer[] => {
+// Exported (Phase 6 Slice 2, context-rebuild, 2026-07-25) so the exhaustiveness
+// test for isLayerAllowed's fail-closed prior_assistant_responses rule
+// (contextRoute.ts) can iterate every real AnswerType directly instead of
+// reverse-engineering a question per type. Pure, deterministic, no behavior
+// change from exporting.
+export const requiredLayersFor = (answerType: AnswerType, documentGroundedCustomModeActive = false): ContextLayer[] => {
   switch (answerType) {
     case 'identity_answer':
       return ['stable_identity', 'resume'];
@@ -1792,7 +1797,8 @@ const requiredLayersFor = (answerType: AnswerType, documentGroundedCustomModeAct
   }
 };
 
-const forbiddenLayersFor = (answerType: AnswerType): ContextLayer[] => {
+// Exported for the same reason as requiredLayersFor above.
+export const forbiddenLayersFor = (answerType: AnswerType): ContextLayer[] => {
   switch (answerType) {
     case 'identity_answer':
       return ['jd', 'negotiation', 'reference_files'];
@@ -1802,7 +1808,17 @@ const forbiddenLayersFor = (answerType: AnswerType): ContextLayer[] => {
     case 'system_design_answer':
     case 'debugging_question_answer':
       // Spec §8.3: generic coding/technical answers must NOT use any profile.
-      return ['resume', 'jd', 'negotiation', 'custom_context', 'reference_files'];
+      // RC3 fix (Phase 6 Slice 2, context-rebuild, 2026-07-25): also forbid
+      // prior_assistant_responses. Before this fix, these five answer types
+      // appeared in NEITHER forbiddenLayersFor NOR requiredLayersFor for this
+      // layer, so isLayerAllowed's fail-open default
+      // (`!plan.forbiddenContextLayers.includes(layer)`, contextRoute.ts)
+      // silently ALLOWED it — an unrelated prior turn's content (e.g. a
+      // résumé/JD-fit answer) could leak into a subsequent, unrelated
+      // coding/technical question's prompt. See
+      // docs/context-rebuild/03_ROOT_CAUSES.md RC3 and
+      // 04_TARGET_ARCHITECTURE.md §8.
+      return ['resume', 'jd', 'negotiation', 'custom_context', 'reference_files', 'prior_assistant_responses'];
     case 'skill_experience_answer':
     case 'skills_answer':
     case 'profile_fact_answer':

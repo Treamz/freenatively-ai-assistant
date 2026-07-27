@@ -4581,6 +4581,28 @@ const isMultimodal = !!(imagePaths?.length);
               : knowledgeResult.contextBlock;
           }
         }
+        // Diagnostic-only (2026-07-26, live-testing session, Bug #3
+        // follow-up): the "not directly mentioned" symptom on JD-fact
+        // questions was traced up to this exact point without a live
+        // process to confirm whether `context` actually carries real JD/
+        // resume content by here — every earlier gate checked out empirically
+        // (planAnswer's gate, isProfileGroundingV2Enabled, buildGroundingBlock)
+        // but the remaining discrepancy could not be resolved without this
+        // signal. Cheap, observe-only, never affects behavior.
+        const { isIntelligenceFlagEnabled: _isTraceFlagOn } = require('./intelligence/intelligenceFlags');
+        if (_isTraceFlagOn('trace')) {
+          try {
+            console.log('[LLMHelper.stream] knowledge-intercept diagnostic', {
+              knowledgeResultPresent: Boolean(knowledgeResult),
+              factualRecall: knowledgeResult?.factualRecall === true,
+              knowledgeInterceptAllowedStream,
+              hasContextBlock: Boolean(knowledgeResult?.contextBlock),
+              contextBlockChars: knowledgeResult?.contextBlock?.length ?? 0,
+              contextHasTargetJob: Boolean(context && context.includes('<target_job>')),
+              contextChars: context?.length ?? 0,
+            });
+          } catch { /* diagnostics only */ }
+        }
       } catch (knowledgeError: any) {
         console.warn('[LLMHelper] Knowledge mode (stream) processing failed, falling back:', knowledgeError.message);
       }
