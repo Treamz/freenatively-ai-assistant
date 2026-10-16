@@ -911,6 +911,10 @@ export interface ElectronAPI {
   // Groq Fast Text Mode
   getGroqFastTextMode: () => Promise<{ enabled: boolean }>;
   setGroqFastTextMode: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
+  getClaudeCodeConfig: () => Promise<{ enabled: boolean; path: string; model: string; timeoutMs: number }>;
+  setClaudeCodeConfig: (config: { enabled: boolean; path: string; model: string; timeoutMs: number }) => Promise<{ success: boolean; error?: string; config?: { enabled: boolean; path: string; model: string; timeoutMs: number } }>;
+  testClaudeCode: (config?: { enabled?: boolean; path?: string; model?: string; timeoutMs?: number }) => Promise<{ success: boolean; error?: string; version?: string; sample?: string }>;
+  getClaudeCodeModels: () => Promise<{ id: string; label: string }[]>;
   getCodexCliConfig: () => Promise<{ enabled: boolean; path: string; model: string; timeoutMs: number; sandboxMode: string; serviceTier?: string; modelReasoningEffort?: string }>;
   setCodexCliConfig: (config: { enabled: boolean; path: string; model: string; timeoutMs: number; sandboxMode?: string; serviceTier?: string; modelReasoningEffort?: string }) => Promise<{ success: boolean; error?: string; config?: { enabled: boolean; path: string; model: string; timeoutMs: number; sandboxMode: string; serviceTier?: string; modelReasoningEffort?: string } }>;
   testCodexCli: (config?: { enabled?: boolean; path?: string; model?: string; timeoutMs?: number; sandboxMode?: string; serviceTier?: string; modelReasoningEffort?: string }) => Promise<{ success: boolean; error?: string; resolvedPath?: string; config?: { enabled: boolean; path: string; model: string; timeoutMs: number; sandboxMode: string; serviceTier?: string; modelReasoningEffort?: string } }>;

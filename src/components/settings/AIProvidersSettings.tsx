@@ -3541,6 +3541,11 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
 
     // --- Local (Codex CLI) ---
     const [codexCliConfig, setCodexCliConfig] = useState({ enabled: false, path: 'codex', model: 'gpt-5.5', timeoutMs: 60000, sandboxMode: 'read-only' as string, serviceTier: 'default', modelReasoningEffort: undefined as string | undefined });
+    // Claude Code (the user's Claude subscription via the Claude Code CLI).
+    const [claudeCodeConfig, setClaudeCodeConfig] = useState({ enabled: false, path: 'claude', model: 'sonnet', timeoutMs: 60000 });
+    const [claudeCodeModels, setClaudeCodeModels] = useState<{ id: string; label: string }[]>([]);
+    const [claudeCodeStatus, setClaudeCodeStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+    const [claudeCodeError, setClaudeCodeError] = useState('');
     // The installed Codex CLI's model list (models_cache.json); null until read.
     const [codexModelCatalog, setCodexModelCatalog] = useState<CodexModelCatalogResult | null>(null);
     const [codexModelsRefreshing, setCodexModelsRefreshing] = useState(false);
@@ -3882,6 +3887,11 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
                 if (cliConfig) setCodexCliConfig(cliConfig as typeof codexCliConfig);
                 const cliCatalog = await window.electronAPI?.getCodexCliModels?.().catch(() => null);
                 if (cliCatalog) setCodexModelCatalog(cliCatalog);
+
+                const ccConfig = await (window.electronAPI as any)?.getClaudeCodeConfig?.().catch(() => null);
+                if (ccConfig) setClaudeCodeConfig(ccConfig);
+                const ccModels = await (window.electronAPI as any)?.getClaudeCodeModels?.().catch(() => null);
+                if (Array.isArray(ccModels) && ccModels.length) setClaudeCodeModels(ccModels);
 
                 // Codex OAuth status — read once on mount so the Settings UI
                 // shows the right state without waiting for a user click.
@@ -4761,6 +4771,34 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
         } catch (e: any) {
             setCodexCliStatus('error');
             setCodexCliError(e.message || t('Codex CLI test failed'));
+        }
+    };
+
+    const saveClaudeCodeConfig = async (next = claudeCodeConfig) => {
+        const normalized = { ...next, timeoutMs: Number(next.timeoutMs) || 60000 };
+        setClaudeCodeConfig(normalized);
+        const result = await (window.electronAPI as any)?.setClaudeCodeConfig?.(normalized);
+        if (result?.config) setClaudeCodeConfig(result.config);
+        return result;
+    };
+
+    const handleTestClaudeCode = async () => {
+        setClaudeCodeStatus('testing');
+        setClaudeCodeError('');
+        try {
+            const saveResult = await saveClaudeCodeConfig();
+            const configToTest = saveResult?.config || claudeCodeConfig;
+            const result = await (window.electronAPI as any)?.testClaudeCode?.(configToTest);
+            if (result?.success) {
+                setClaudeCodeStatus('success');
+                setTimeout(() => setClaudeCodeStatus('idle'), 3000);
+            } else {
+                setClaudeCodeStatus('error');
+                setClaudeCodeError(result?.error || t('Claude Code test failed'));
+            }
+        } catch (e: any) {
+            setClaudeCodeStatus('error');
+            setClaudeCodeError(e.message || t('Claude Code test failed'));
         }
     };
 
@@ -6094,6 +6132,94 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
                             </div>
                         </>
                     )}
+            </div>
+
+            {/* Claude Code — the user's Claude subscription via the Claude Code CLI
+                (`claude -p` headless mode). Same card shape as Codex above. Auth is
+                the CLI's own login session — there is no sign-in flow to host here,
+                so the card owns only the switch, the model/path/timeout fields, and
+                a Test Connection probe that issues one tiny real prompt. */}
+            <div className="aip-card p-5 space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                    <div className="flex gap-3 min-w-0">
+                        <AipProviderMark provider="claude" name="Claude Code" className="mt-0.5" />
+                        <div className="min-w-0">
+                            <h3 className="text-sm font-bold aip-hero mb-1">Claude Code</h3>
+                            <p className="text-xs aip-muted">{t('Use your Claude subscription (Claude Code CLI) as an AI provider.')}</p>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                        <AipSwitch
+                            checked={claudeCodeConfig.enabled}
+                            onChange={() => void saveClaudeCodeConfig({ ...claudeCodeConfig, enabled: !claudeCodeConfig.enabled })}
+                            label={`${claudeCodeConfig.enabled ? t('Disable') : t('Enable')} Claude Code`}
+                            title={claudeCodeConfig.enabled ? t('Disable provider') : t('Enable provider')}
+                        />
+                    </div>
+                </div>
+
+                {claudeCodeConfig.enabled && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-end mt-1">
+                        <label className="space-y-1 block min-w-0">
+                            <span className="aip-label">{t('Model')}</span>
+                            <select
+                                value={claudeCodeConfig.model}
+                                onChange={e => void saveClaudeCodeConfig({ ...claudeCodeConfig, model: e.target.value })}
+                                className="aip-input"
+                            >
+                                {(claudeCodeModels.length ? claudeCodeModels : [{ id: claudeCodeConfig.model, label: claudeCodeConfig.model }]).map(m => (
+                                    <option key={m.id} value={m.id}>{m.label}</option>
+                                ))}
+                            </select>
+                        </label>
+                        <label className="space-y-1 block min-w-0">
+                            <span className="aip-label">{t('CLI path')}</span>
+                            <input
+                                type="text"
+                                value={claudeCodeConfig.path}
+                                onChange={e => setClaudeCodeConfig(prev => ({ ...prev, path: e.target.value }))}
+                                onBlur={() => void saveClaudeCodeConfig()}
+                                data-mono="true"
+                                className="aip-input"
+                            />
+                        </label>
+                        <label className="space-y-1 block min-w-0">
+                            <span className="aip-label">{t('Timeout (ms)')}</span>
+                            <input
+                                type="number"
+                                value={claudeCodeConfig.timeoutMs}
+                                onChange={e => setClaudeCodeConfig(prev => ({ ...prev, timeoutMs: Number(e.target.value) }))}
+                                onBlur={() => void saveClaudeCodeConfig()}
+                                data-mono="true"
+                                className="aip-input"
+                                min={1000}
+                            />
+                        </label>
+                        <button
+                            type="button"
+                            onClick={handleTestClaudeCode}
+                            disabled={claudeCodeStatus === 'testing'}
+                            className="aip-btn w-full"
+                            data-tone={claudeCodeStatus === 'success' ? 'ok' : claudeCodeStatus === 'error' ? 'danger' : undefined}
+                        >
+                            {claudeCodeStatus === 'testing' ? (
+                                <span className="inline-flex items-center gap-1.5"><Loader2 size={12} strokeWidth={1.75} className="aip-spinner" />{t('Testing…')}</span>
+                            ) : claudeCodeStatus === 'success' ? (
+                                <span className="inline-flex items-center gap-1.5"><AipPassedCheck />{t('Passed')}</span>
+                            ) : claudeCodeStatus === 'error' ? (
+                                <span className="inline-flex items-center gap-1.5"><AlertCircle size={12} strokeWidth={1.75} />{t('Failed')}</span>
+                            ) : (
+                                t('Test Connection')
+                            )}
+                        </button>
+                        {claudeCodeStatus === 'error' && claudeCodeError && (
+                            <p className="text-[10px] aip-danger-fg md:col-span-2">{claudeCodeError}</p>
+                        )}
+                        <p className="text-[10px] aip-muted md:col-span-2">
+                            {t('Sign-in happens in the CLI: run `claude` once in a terminal and log in — Natively reuses that session.')}
+                        </p>
+                    </div>
+                )}
             </div>
 
             </div>

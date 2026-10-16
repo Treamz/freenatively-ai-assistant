@@ -730,6 +730,10 @@ interface ElectronAPI {
   // Groq Fast Text Mode
   getGroqFastTextMode: () => Promise<{ enabled: boolean }>;
   setGroqFastTextMode: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
+  getClaudeCodeConfig: () => Promise<{ enabled: boolean; path: string; model: string; timeoutMs: number }>;
+  setClaudeCodeConfig: (config: { enabled: boolean; path: string; model: string; timeoutMs: number }) => Promise<{ success: boolean; error?: string; config?: { enabled: boolean; path: string; model: string; timeoutMs: number } }>;
+  testClaudeCode: (config?: { enabled?: boolean; path?: string; model?: string; timeoutMs?: number }) => Promise<{ success: boolean; error?: string; version?: string; sample?: string }>;
+  getClaudeCodeModels: () => Promise<{ id: string; label: string }[]>;
   getCodexCliConfig: () => Promise<{
     enabled: boolean;
     path: string;
@@ -2708,6 +2712,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Groq Fast Text Mode
   getGroqFastTextMode: () => ipcRenderer.invoke('get-groq-fast-text-mode'),
   setGroqFastTextMode: (enabled: boolean) => ipcRenderer.invoke('set-groq-fast-text-mode', enabled),
+  getClaudeCodeConfig: () => ipcRenderer.invoke('get-claude-code-config'),
+  setClaudeCodeConfig: (config: { enabled: boolean; path: string; model: string; timeoutMs: number }) => ipcRenderer.invoke('set-claude-code-config', config),
+  testClaudeCode: (config?: { enabled?: boolean; path?: string; model?: string; timeoutMs?: number }) => ipcRenderer.invoke('test-claude-code', config),
+  getClaudeCodeModels: () => ipcRenderer.invoke('claude-code:models'),
   getCodexCliConfig: () => ipcRenderer.invoke('get-codex-cli-config'),
   setCodexCliConfig: (config: {
     enabled: boolean;

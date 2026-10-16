@@ -28,6 +28,7 @@ import { AudioDevices } from './audio/AudioDevices';
 import { DatabaseManager } from './db/DatabaseManager'; // Import Database Manager
 import { AppState } from './main';
 import { CodexCliService, getCodexAuthStatus, isCodexAuthError } from './services/CodexCliService';
+import { ClaudeCodeCliService, CLAUDE_CODE_MODELS } from './services/ClaudeCodeCliService';
 import { describeServiceAccountRejection } from './services/googleServiceAccount';
 import { PHONE_THUMB_MAX_CHARS, PhoneMirrorService } from './services/PhoneMirrorService';
 import { sanitizeContextEnvelope } from './services/browser-context/sanitize';
@@ -14749,6 +14750,57 @@ export function initializeIpcHandlers(appState: AppState): void {
       };
     } catch (error: any) {
       return { success: false, error: error.message };
+    }
+  });
+
+  // ─── Claude Code (user's Claude subscription via the Claude Code CLI) ──────
+  safeHandle('get-claude-code-config', () => {
+    try {
+      return appState.processingHelper.getLLMHelper().getClaudeCodeConfig();
+    } catch {
+      return ClaudeCodeCliService.normalizeConfig({});
+    }
+  });
+
+  safeHandle('claude-code:models', () => CLAUDE_CODE_MODELS);
+
+  safeHandle('set-claude-code-config', (_, config: any) => {
+    try {
+      const normalized = ClaudeCodeCliService.normalizeConfig(config || {});
+      const sm = SettingsManager.getInstance();
+      // Same degraded-store contract as set-codex-cli-config (R-24): a refused
+      // first write means nothing is applied or broadcast.
+      if (!sm.set('claudeCodeEnabled', normalized.enabled)) {
+        return { success: false, error: 'settings_store_degraded' };
+      }
+      sm.set('claudeCodePath', normalized.path);
+      sm.set('claudeCodeModel', normalized.model);
+      sm.set('claudeCodeTimeoutMs', normalized.timeoutMs);
+      appState.processingHelper.getLLMHelper().setClaudeCodeConfig(normalized);
+      broadcastCredentialsChanged();
+      return { success: true, config: normalized };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  safeHandle('test-claude-code', async (_, config?: any) => {
+    try {
+      const current = appState.processingHelper.getLLMHelper().getClaudeCodeConfig();
+      const normalized = ClaudeCodeCliService.normalizeConfig({ ...current, ...(config || {}) });
+      const probe = await ClaudeCodeCliService.probeBinary(normalized.path);
+      if (!probe.found) {
+        return { success: false, error: probe.error, config: normalized };
+      }
+      // A real one-token call is the only true signed-in check the CLI offers.
+      const text = await ClaudeCodeCliService.run(normalized.path, {
+        prompt: 'Reply with the single word: ok',
+        model: normalized.model,
+        timeoutMs: Math.min(normalized.timeoutMs, 30_000),
+      });
+      return { success: true, version: probe.version, sample: text.trim().slice(0, 40), config: normalized };
+    } catch (error: any) {
+      return { success: false, error: error?.message || String(error) };
     }
   });
 

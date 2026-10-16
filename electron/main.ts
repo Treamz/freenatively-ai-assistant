@@ -2262,6 +2262,14 @@ export class AppState {
         serviceTier: settingsManager.get('codexCliServiceTier'),
         modelReasoningEffort: settingsManager.get('codexCliModelReasoningEffort'),
       });
+      // Same no-literals rule: unset fields fall to DEFAULT_CLAUDE_CODE_CONFIG
+      // inside ClaudeCodeCliService.normalizeConfig.
+      llmHelper.setClaudeCodeConfig({
+        enabled: !!settingsManager.get('claudeCodeEnabled'),
+        path: settingsManager.get('claudeCodePath'),
+        model: settingsManager.get('claudeCodeModel'),
+        timeoutMs: settingsManager.get('claudeCodeTimeoutMs'),
+      });
     }
 
     // Initialize RAGManager (requires database to be ready)

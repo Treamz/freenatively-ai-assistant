@@ -80,6 +80,7 @@ import { promisify } from 'util';
 import axios from 'axios';
 import { createProviderRateLimiters, RateLimiter } from './services/RateLimiter';
 import { chatGptCompatibleModel, CodexCliConfig, CodexCliService, codexSignedOutMessage, DEFAULT_CODEX_CLI_CONFIG, getCodexAuthStatus } from './services/CodexCliService';
+import { ClaudeCodeCliService, ClaudeCodeConfig, DEFAULT_CLAUDE_CODE_CONFIG } from './services/ClaudeCodeCliService';
 import { AntigravityService } from './services/AntigravityService';
 import { GROQ_PRIMARY_MODEL, groqFallbackFor, isGroqModelGone, groqReasoningParams } from './llm/groqModels';
 import { DirectAssistError } from './direct-assist/errors';
@@ -858,6 +859,7 @@ export class LLMHelper {
   private activeCurlProvider: CurlProvider | null = null;
   private groqFastTextMode: boolean = false;
   private codexCliConfig: CodexCliConfig = DEFAULT_CODEX_CLI_CONFIG;
+  private claudeCodeConfig: ClaudeCodeConfig = DEFAULT_CLAUDE_CODE_CONFIG;
   private knowledgeOrchestrator: any = null;
   private negotiationCoachingHandler: ((payload: unknown) => void) | null = null;
   private aiResponseLanguage: string = 'auto';
@@ -1371,6 +1373,7 @@ export class LLMHelper {
   private static readonly PROVIDER_LABEL_FAMILY: Readonly<Record<string, string>> = {
     gemini: 'gemini', groq: 'groq', natively: 'natively', openai: 'openai',
     claude: 'claude', deepseek: 'deepseek', litellm: 'litellm', codex: 'codex-cli',
+    'claude-code': 'claude-code',
     // Present so the last-boundary disabled check actually runs: the lookup is
     // `if (family && ...)`, so an absent entry removes the guard silently
     // rather than failing. The client getter is the primary guard; this is the
@@ -2524,6 +2527,15 @@ export class LLMHelper {
     return this.codexCliConfig;
   }
 
+  public setClaudeCodeConfig(config: Partial<ClaudeCodeConfig>) {
+    this.claudeCodeConfig = ClaudeCodeCliService.normalizeConfig(config);
+    console.log(`[LLMHelper] Claude Code ${this.claudeCodeConfig.enabled ? 'enabled' : 'disabled'} with model: ${this.claudeCodeConfig.model}`);
+  }
+
+  public getClaudeCodeConfig(): ClaudeCodeConfig {
+    return this.claudeCodeConfig;
+  }
+
   public getAiResponseLanguage(): string {
     return this.aiResponseLanguage;
   }
@@ -3275,6 +3287,42 @@ export class LLMHelper {
 
   private buildCodexCliPrompt(userContent: string, systemPrompt?: string): string {
     return [systemPrompt, userContent].filter(Boolean).join('\n\n');
+  }
+
+  // ─── Claude Code (the user's Claude subscription via `claude -p`) ──────────
+
+  private isClaudeCodeAvailable(): boolean {
+    if (this.isProviderDisabled('claude-code')) return false;
+    if (!this.claudeCodeConfig.enabled) return false;
+    // Signed-in state is only knowable by calling the CLI; a signed-out
+    // session surfaces as a friendly per-call error (ClaudeCodeCliService),
+    // exactly like a revoked key would on any other provider.
+    return true;
+  }
+
+  private async *streamWithClaudeCode(userContent: string, systemPrompt?: string, signal?: AbortSignal): AsyncGenerator<string, void, unknown> {
+    if (!this.isClaudeCodeAvailable()) throw new Error('Claude Code transport is disabled.');
+    // Claude Code routes to Anthropic's API — a CLOUD provider, with the same
+    // local-only boundary every other cloud provider has (see the Codex
+    // methods above for why the boundary lives at the transport too).
+    if (this.isLocalOnlyMode) throw new Error("Cloud providers disabled in local-only mode");
+    this.assertOutboundScopes('claude-code', userContent);
+    // The CLI has its own system prompt (it is an agent harness); ours is
+    // folded into the stdin prompt the way the legacy Codex subprocess did it.
+    // argv is NOT an option for either part: macOS caps argv around 256KB and
+    // meeting prompts routinely exceed it.
+    yield* ClaudeCodeCliService.stream(this.claudeCodeConfig.path, {
+      prompt: this.buildCodexCliPrompt(userContent, systemPrompt),
+      model: this.claudeCodeConfig.model,
+      timeoutMs: this.claudeCodeConfig.timeoutMs,
+      signal,
+    });
+  }
+
+  private async generateWithClaudeCode(userContent: string, systemPrompt?: string, signal?: AbortSignal): Promise<string> {
+    let out = '';
+    for await (const chunk of this.streamWithClaudeCode(userContent, systemPrompt, signal)) out += chunk;
+    return out;
   }
 
   // Fast Response Mode has no Codex setting of its own any more (2026-09-26).
@@ -8798,6 +8846,8 @@ let isMultimodal = !!(imagePaths?.length);
       if (this.isCodexAvailable()) {
         providers.push({ name: `Codex CLI (${this.codexCliConfig.model})`, execute: () => this.streamWithCodexCli(userContent, openaiSystemPrompt, false, imagePaths, abortSignal) });
       }
+      // Claude Code is text-only (`claude -p` has no image input), so it has
+      // no rung in the multimodal chain — the text-only chain below has it.
       if (this.openaiClient) {
         providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.streamWithOpenaiMultimodal(userContent, imagePaths!, openaiSystemPrompt, textOpenAI, abortSignal) });
       }
@@ -8828,6 +8878,9 @@ let isMultimodal = !!(imagePaths?.length);
       }
       if (this.isCodexAvailable()) {
         providers.push({ name: `Codex CLI (${this.codexCliConfig.model})`, execute: () => this.streamWithCodexCli(userContent, openaiSystemPrompt, false, undefined, abortSignal) });
+      }
+      if (this.isClaudeCodeAvailable()) {
+        providers.push({ name: `Claude Code (${this.claudeCodeConfig.model})`, execute: () => this.streamWithClaudeCode(userContent, claudeSystemPrompt, abortSignal) });
       }
       if (this.openaiClient) {
         providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.streamWithOpenai(userContent, openaiSystemPrompt, textOpenAI, abortSignal) });
