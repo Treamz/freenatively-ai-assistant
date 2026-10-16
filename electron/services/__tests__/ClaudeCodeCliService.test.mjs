@@ -70,6 +70,18 @@ test('auth-error classification catches CLI sign-out phrasings', () => {
     assert.ok(!isClaudeCodeAuthError(new Error('ECONNRESET')));
 });
 
+test('resolveClaudeBinary: GUI apps do not inherit the shell PATH', async () => {
+    const { resolveClaudeBinary } = await import(path.join(dist, 'ClaudeCodeCliService.js'));
+    // Explicit paths pass through; ~ expands.
+    assert.equal(resolveClaudeBinary('/opt/x/claude'), '/opt/x/claude');
+    const os = await import('node:os');
+    assert.equal(resolveClaudeBinary('~/bin/claude'), path.join(os.homedir(), 'bin/claude'));
+    // A bare command resolves to a COMMON_BIN_DIRS hit when one exists
+    // (this machine has Homebrew's claude), or falls back to the bare name.
+    const resolved = resolveClaudeBinary('claude');
+    assert.ok(resolved === 'claude' || resolved.endsWith('/claude'), resolved);
+});
+
 test('model catalog offers the alias models', () => {
     assert.deepEqual(CLAUDE_CODE_MODELS.map(m => m.id), ['sonnet', 'opus', 'haiku']);
 });

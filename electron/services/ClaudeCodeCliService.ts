@@ -16,7 +16,9 @@
  * `claude` once in a terminal and log in.
  */
 import { spawn } from 'child_process';
+import * as fs from 'fs';
 import * as os from 'os';
+import * as path from 'path';
 
 export interface ClaudeCodeConfig {
     enabled: boolean;
@@ -56,6 +58,77 @@ const AUTH_ERROR_RE = /not logged in|please run \/login|invalid api key|authenti
 export function isClaudeCodeAuthError(err: unknown): boolean {
     const msg = err instanceof Error ? err.message : String(err ?? '');
     return AUTH_ERROR_RE.test(msg) || msg.includes(CLAUDE_CODE_NOT_SIGNED_IN_MESSAGE);
+}
+
+/**
+ * Where the Claude Code CLI commonly lives. A GUI app launched from
+ * Finder/Dock inherits launchd's PATH (/usr/bin:/bin:/usr/sbin:/sbin), NOT the
+ * shell's — so a bare `claude` resolves in a terminal-run dev instance and
+ * ENOENTs in the packaged app. These dirs cover Homebrew (arm64 + Intel), the
+ * official installer (~/.claude/local), npm/volta/bun globals, and ~/bin.
+ */
+const COMMON_BIN_DIRS = [
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    path.join(os.homedir(), '.claude', 'local'),
+    path.join(os.homedir(), '.local', 'bin'),
+    path.join(os.homedir(), 'bin'),
+    path.join(os.homedir(), '.npm-global', 'bin'),
+    path.join(os.homedir(), '.volta', 'bin'),
+    path.join(os.homedir(), '.bun', 'bin'),
+];
+
+/**
+ * Expand the configured CLI path to something spawn() can execute from a GUI
+ * app: `~` is expanded, an explicit path passes through, and a bare command is
+ * probed against COMMON_BIN_DIRS before falling back to the inherited PATH
+ * (which still works for terminal-launched dev runs).
+ */
+export function resolveClaudeBinary(configured: string): string {
+    const raw = (configured || '').trim() || DEFAULT_CLAUDE_CODE_CONFIG.path;
+    const expanded = raw.startsWith('~/') ? path.join(os.homedir(), raw.slice(2)) : raw;
+    if (expanded.includes(path.sep)) return expanded;
+    for (const dir of COMMON_BIN_DIRS) {
+        const candidate = path.join(dir, expanded);
+        try {
+            fs.accessSync(candidate, fs.constants.X_OK);
+            return candidate;
+        } catch { /* keep probing */ }
+    }
+    return expanded;
+}
+
+/**
+ * The child's PATH: the resolved binary's own directory first (a `claude`
+ * wrapper script re-execs node/its real binary by bare name), then the common
+ * install dirs, then whatever the app inherited.
+ */
+function childPath(resolvedBinary: string): string {
+    const dirs = [path.dirname(resolvedBinary), ...COMMON_BIN_DIRS, process.env.PATH || ''];
+    return [...new Set(dirs.filter(Boolean))].join(':');
+}
+
+/**
+ * The child's full environment:
+ * - PATH rebuilt for GUI launches (see childPath);
+ * - ANTHROPIC_API_KEY DELETED, not blanked — an empty-but-present value still
+ *   counts as "an API key is configured" to the CLI, and the point of this
+ *   provider is the user's subscription login;
+ * - USER/LOGNAME guaranteed: the CLI resolves its Keychain credentials
+ *   through them, and a missing USER surfaces as a bogus "Not logged in ·
+ *   Please run /login" (verified live against claude 2.1.220).
+ */
+function childEnv(resolvedBinary: string): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: childPath(resolvedBinary) };
+    delete env.ANTHROPIC_API_KEY;
+    if (!env.USER || !env.LOGNAME) {
+        try {
+            const username = os.userInfo().username;
+            env.USER = env.USER || username;
+            env.LOGNAME = env.LOGNAME || username;
+        } catch { /* leave as-is — the CLI will say what it is missing */ }
+    }
+    return env;
 }
 
 export interface ClaudeCodeRunOptions {
@@ -130,26 +203,25 @@ export class ClaudeCodeCliService {
     }
 
     /** Collect the full response. Thin wrapper over stream(). */
-    public static async run(path: string, options: ClaudeCodeRunOptions): Promise<string> {
+    public static async run(binaryPath: string, options: ClaudeCodeRunOptions): Promise<string> {
         let out = '';
-        for await (const chunk of this.stream(path, options)) out += chunk;
+        for await (const chunk of this.stream(binaryPath, options)) out += chunk;
         return out;
     }
 
     /** Stream the response as text deltas. */
-    public static async *stream(path: string, options: ClaudeCodeRunOptions): AsyncGenerator<string, void, unknown> {
+    public static async *stream(binaryPath: string, options: ClaudeCodeRunOptions): AsyncGenerator<string, void, unknown> {
         if (options.signal?.aborted) throw new Error('Claude Code request aborted before start.');
 
+        const resolved = resolveClaudeBinary(binaryPath);
         const args = this.buildArgs(options.model);
-        const child = spawn(path, args, {
+        const child = spawn(resolved, args, {
             stdio: ['pipe', 'pipe', 'pipe'],
             // cwd is pinned OUTSIDE any project: `claude` loads CLAUDE.md and
             // project settings from its working directory, and an app launched
             // from a repo must not leak that repo's instructions into answers.
             cwd: os.tmpdir(),
-            // Never inherit an ANTHROPIC_API_KEY from the app environment —
-            // the point of this provider is the user's subscription login.
-            env: { ...process.env, ANTHROPIC_API_KEY: '' },
+            env: childEnv(resolved),
         });
 
         let stderrTail = '';
@@ -236,9 +308,13 @@ export class ClaudeCodeCliService {
      * reports its version. Signed-in state is only knowable by making a call,
      * so the card's "Test Connection" button issues a tiny real prompt.
      */
-    public static probeBinary(path: string): Promise<{ found: boolean; version?: string; error?: string }> {
+    public static probeBinary(binaryPath: string): Promise<{ found: boolean; version?: string; error?: string }> {
         return new Promise((resolve) => {
-            const child = spawn(path, ['--version'], { stdio: ['ignore', 'pipe', 'pipe'] });
+            const resolved = resolveClaudeBinary(binaryPath);
+            const child = spawn(resolved, ['--version'], {
+                stdio: ['ignore', 'pipe', 'pipe'],
+                env: childEnv(resolved),
+            });
             let out = '';
             const timer = setTimeout(() => { child.kill('SIGKILL'); resolve({ found: false, error: 'timed out' }); }, 10_000);
             child.stdout.on('data', (d: Buffer) => { out += d.toString(); });
